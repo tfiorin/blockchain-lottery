@@ -44,7 +44,7 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
 
     mapping(address => mapping(uint256 => uint256[]))   private participantsNumbers;
     mapping(address => uint256)                         private participantTicketCount;
-    mapping(address => uint256)                         private historicalDrawingWinners;
+    mapping(uint256 => address[])                       private historicalDrawingWinners;
 
     /* ####################### */
     /* Chainlink VRF Variables */
@@ -99,11 +99,11 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
             currentDrawingParticipants.push(payable(msg.sender));
 
             uint256[] memory numbers = new uint256[](5);
-            numbers[0] = num1[i];
-            numbers[1] = num2[i];
-            numbers[2] = num3[i];
-            numbers[3] = num4[i];
-            numbers[4] = num5[i];
+            numbers.push(num1[i]);
+            numbers.push(num2[i]);
+            numbers.push(num3[i]);
+            numbers.push(num4[i]);
+            numbers.push(num5[i]);
 
             participantsNumbers[msg.sender][participantTicketCount[msg.sender]] = numbers;
             participantTicketCount[msg.sender] += 1;
@@ -113,8 +113,16 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
         }       
     }
 
-    function getNumbersSelected() public view returns(uint8[]) {
+    function getLatestDrawingNumbers() public view returns(uint8[]) {
         return numbersSelected;
+    }
+
+    function getCurrentDrawingNumber() public view returns(uint256) {
+        return drawingNumber;
+    }
+
+    function getAllWinnersFromDrawing(uint256 _drawingNumber) public view returns(address[] memory) {        
+        return historicalDrawingWinners[_drawingNumber];
     }
     
     /* ################### */
@@ -193,15 +201,13 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
 
                 if (winNum1 == pNum1 && winNum2 == pNum2 && winNum3 == pNum3 && winNum4 == pNum4 && winNum5 == pNum5) {
                     drawingWinners.push(participant);
-                    //add winner to historical mapping
-                    historicalDrawingWinners[participant] = drawingNumber;
-
                     emit DrawingWinner(drawingNumber, participant);
                 }
             }
         }
 
         if (drawingWinners.length > 0) {
+            historicalDrawingWinners[drawingNumber].push(drawingWinners);
             if (payWinners()) {
                 //reset winners for next draw
                 drawingWinners = new address[](0);
