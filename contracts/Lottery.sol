@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.19;
 
-import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
-import {LinkTokenInterface} from "@chainlink/contracts/src/v0.8/shared/interfaces/LinkTokenInterface.sol";
-import {VRFV2PlusWrapperConsumerBase} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapperConsumerBase.sol";
+// import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
+import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
 
 error NotEnoughMoney();
 error NotEnoughTickets();
@@ -12,6 +12,7 @@ error NotEnoughFunds();
 error NoWinnerFound();
 error NoRandomNumbersReturned();
 error LotteryNotOpen();
+error NotValidCall();
 
 // Abstract
 interface USDC {
@@ -22,7 +23,7 @@ interface USDC {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
 }
 
-contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
+contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
 
     enum LotteryState {
         OPEN,
@@ -36,6 +37,7 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
     uint256     private constant PERCENTAGE = 15;                   //fixed percentage that will be paid out to manager when a winning draw occurs
 
     USDC        private usdcToken;
+    address     private manager;                                    //address of the manager
     address     payable[] private currentDrawingParticipants;       //this will contain all addresses for the current draw
     address[]   private drawingWinners;                             //winners of the draw
     uint256     private drawingNumber;                              //current drawing number
@@ -49,11 +51,18 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
     /* ####################### */
     /* Chainlink VRF Variables */
     /* ####################### */
+    uint16      private constant REQUEST_CONFIRMATIONS = 3;
+    uint32      private constant NUM_WORDS = 5;    
     uint256     private immutable i_subscriptionId;
     bytes32     private immutable i_gasLane;
     uint32      private immutable i_callbackGasLimit;
-    uint16      private constant REQUEST_CONFIRMATIONS = 3;
-    uint32      private constant NUM_WORDS = 1;
+    uint256     private immutable i_interval;
+    uint256     private lastTimeStamp;    
+
+    /**
+     * HARDCODED FOR SEPOLIA
+     * COORDINATOR: 0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B
+     */
 
     /* ###### */
     /* Events */
@@ -66,14 +75,22 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
     /* ######### */
     /* Functions */
     /* ######### */
-    constructor(uint256 subscriptionId,
+    constructor(
+        uint256 subscriptionId,
         bytes32 gasLane, // keyHash
         uint256 interval,
-        uint256 entranceFee,
         uint32 callbackGasLimit,
         address vrfCoordinatorV2,
-        address _usdcTokenAddress) ConfirmedOwner(msg.sender) VRFV2PlusWrapperConsumerBase(wrapperAddress) {
-        usdcToken = USDC(_usdcTokenAddress);
+        address usdcTokenAddress
+    ) VRFConsumerBaseV2Plus(vrfCoordinatorV2) {
+        i_gasLane = gasLane;
+        i_interval = interval;
+        i_subscriptionId = subscriptionId;        
+        i_callbackGasLimit = callbackGasLimit;
+        lastTimeStamp = block.timestamp;
+
+        manager = payable(msg.sender);
+        usdcToken = USDC(usdcTokenAddress);
         drawingNumber = 1;        
         lotteryState = LotteryState.OPEN;
     }
@@ -88,51 +105,59 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
 
         uint256 amount = (TICKET_PRICE_USDT * 1e6) * numTickets; //convert to USDC
 
-        if (msg.value < amount) {
+        // Transfer money from user to this contract
+        bool isTransferSuccessfull = usdcToken.transferFrom(msg.sender, address(this), amount); 
+
+        if(isTransferSuccessfull) { 
+            for (uint256 i = 0; i < numTickets; i++) {
+                currentDrawingParticipants.push(payable(msg.sender));
+
+                uint256[] memory numbers = new uint256[](5);
+                numbers[0] = num1[i];
+                numbers[1] = num2[i];
+                numbers[2] = num3[i];
+                numbers[3] = num4[i];
+                numbers[4] = num5[i];
+
+                participantsNumbers[msg.sender][participantTicketCount[msg.sender]] = numbers;
+                participantTicketCount[msg.sender] += 1;
+
+                // emit event to record participant into the blockchain
+                emit DrawingEntered(drawingNumber, msg.sender, num1[i], num2[i], num3[i], num4[i], num5[i]);
+            }       
+        } else {
             revert NotEnoughMoney();
         }
-
-        // Transfer money from user to this contract
-        usdcToken.transferFrom(msg.sender, address(this), amount);  
- 
-        for (uint256 i = 0; i < numTickets; i++) {
-            currentDrawingParticipants.push(payable(msg.sender));
-
-            uint256[] memory numbers = new uint256[](5);
-            numbers.push(num1[i]);
-            numbers.push(num2[i]);
-            numbers.push(num3[i]);
-            numbers.push(num4[i]);
-            numbers.push(num5[i]);
-
-            participantsNumbers[msg.sender][participantTicketCount[msg.sender]] = numbers;
-            participantTicketCount[msg.sender] += 1;
-
-            // emit event to record participant into the blockchain
-            emit DrawingEntered(drawingNumber, msg.sender, num1[i], num2[i], num3[i], num4[i], num5[i]);
-        }       
-    }
-
-    function getLatestDrawingNumbers() public view returns(uint8[]) {
-        return numbersSelected;
-    }
-
-    function getCurrentDrawingNumber() public view returns(uint256) {
-        return drawingNumber;
-    }
-
-    function getAllWinnersFromDrawing(uint256 _drawingNumber) public view returns(address[] memory) {        
-        return historicalDrawingWinners[_drawingNumber];
     }
     
     /* ################### */
     /* CHAINLINK FUNCTIONS */
     /* ################### */
-    function executeDraw() external onlyOwner returns (uint256) {
-        bytes memory extraArgs = VRFV2PlusClient._argsToBytes(
-            VRFV2PlusClient.ExtraArgsV1({nativePayment: false})
-        );
+    // -> https://docs.chain.link/chainlink-automation/guides/compatible-contracts
+    function checkUpkeep(
+        bytes memory /* checkData */
+    )
+        public
+        view
+        override
+        returns (bool upkeepNeeded, bytes memory /* performData */)
+    {
+        bool timeHasPassed = ((block.timestamp - lastTimeStamp) > i_interval);
+        bool hasPlayers = (currentDrawingParticipants.length > 0);
+        bool hasBalance = (address(this).balance > 0);
+        bool isOpen = (lotteryState == LotteryState.OPEN);
+        upkeepNeeded = timeHasPassed && hasPlayers && hasBalance && isOpen;
+        return (upkeepNeeded, "0x0");
+    }
+
+    function performUpkeep(bytes calldata /* performData */) external {
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert NotValidCall();
+        }
+
         // Will revert if subscription is not set and funded.
+        // -> https://docs.chain.link/vrf/v2-5/subscription/get-a-random-number
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: i_gasLane,
@@ -147,13 +172,10 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
             })
         );
 
-        requestIds.push(requestId);
-        lastRequestId = requestId;
         emit RequestSent(requestId, block.timestamp);
-        return requestId;
     }
 
-    function fulfillRandomWords(uint256, /* requestId */ uint256[] memory randomWords) internal override {
+    function fulfillRandomWords(uint256, /* requestId */ uint256[] calldata randomWords) internal override {
         numbersSelected = getUniqueNumbersFromVRF(randomWords, 60, 5);
         findWinners();
     }
@@ -207,7 +229,7 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
         }
 
         if (drawingWinners.length > 0) {
-            historicalDrawingWinners[drawingNumber].push(drawingWinners);
+            historicalDrawingWinners[drawingNumber] = drawingWinners;
             if (payWinners()) {
                 //reset winners for next draw
                 drawingWinners = new address[](0);
@@ -228,13 +250,13 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
         //Pay manager
         // (bool callManagerSucess, ) = address(this).call{value: amountToManager}("");
         // require(callManagerSucess, "Withdrawal failed!");
-        usdcToken.transfer(address(this), amountToIndividualWinner);
+        usdcToken.transfer(manager, amountToManager);
 
         //Pay winners
         for (uint256 i = 0; i < drawingWinners.length; ++i) {
             //(bool callSucess, ) = drawingWinners[i].call{ value: amountToIndividualWinner }("");
             //require(callSucess, "Withdrawal failed!");
-            //usdcToken.transfer(drawingWinners[i], amountToIndividualWinner);
+            usdcToken.transfer(drawingWinners[i], amountToIndividualWinner);
 
             emit WinnerPaid(drawingNumber, drawingWinners[i]);
         }
@@ -244,5 +266,20 @@ contract Lottery is VRFV2PlusWrapperConsumerBase, ConfirmedOwner {
     
     function getWinnerNumbers() private view returns (uint8, uint8, uint8, uint8, uint8) {        
         return (numbersSelected[0], numbersSelected[1], numbersSelected[2], numbersSelected[3], numbersSelected[4]); //for testing purposes
+    }
+
+    /* ################# */
+    /* GET FUNCTIONS */
+    /* ################# */
+    function getLatestDrawingNumbers() public view returns(uint8[] memory) {
+        return numbersSelected;
+    }
+
+    function getCurrentDrawingNumber() public view returns(uint256) {
+        return drawingNumber;
+    }
+
+    function getAllWinnersFromDrawing(uint256 _drawingNumber) public view returns(address[] memory) {        
+        return historicalDrawingWinners[_drawingNumber];
     }
 }
