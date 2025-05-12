@@ -38,6 +38,7 @@ const { assert, expect } = require("chai")
               const transaction = await VRFCoordinatorV2_5Mock.createSubscription()
               const transactionReceipt = await transaction.wait(1)
               const subscriptionId = ethers.BigNumber.from(transactionReceipt.events[0].topics[1])
+              console.log("subscriptionId Id:", subscriptionId.toString())
               await VRFCoordinatorV2_5Mock.fundSubscription(subscriptionId, fundAmount)
 
               const vrfCoordinatorAddress = VRFCoordinatorV2_5Mock.address
@@ -61,6 +62,8 @@ const { assert, expect } = require("chai")
 
               await VRFCoordinatorV2_5Mock.addConsumer(subscriptionId, randomNumberConsumerV2Plus.address)
 
+              console.log("is consumer added: ", await VRFCoordinatorV2_5Mock.consumerIsAdded(subscriptionId, randomNumberConsumerV2Plus.address));
+
               return { randomNumberConsumerV2Plus, VRFCoordinatorV2_5Mock }
           }
 
@@ -77,32 +80,30 @@ const { assert, expect } = require("chai")
                   })
 
                   it("Should successfully request a random number and get a result", async function () {
-                      const { randomNumberConsumerV2Plus, VRFCoordinatorV2_5Mock } = await loadFixture(
-                          deployRandomNumberConsumerFixture
-                      )
-                      await randomNumberConsumerV2Plus.requestRandomWords()
-                      const requestId = await randomNumberConsumerV2Plus.s_requestId()
+                        const { randomNumberConsumerV2Plus, VRFCoordinatorV2_5Mock } = await loadFixture(
+                            deployRandomNumberConsumerFixture
+                        )
+                        await expect(randomNumberConsumerV2Plus.requestRandomWords()).to.emit(
+                            VRFCoordinatorV2_5Mock,
+                            "RandomWordsRequested"
+                        )
+                        const requestId = await randomNumberConsumerV2Plus.s_requestId()
 
-                      // simulate callback from the oracle network
-                      await expect(
-                          VRFCoordinatorV2_5Mock.fulfillRandomWords(
-                              requestId,
-                              randomNumberConsumerV2Plus.address
-                          )
-                      ).to.emit(randomNumberConsumerV2Plus, "ReturnedRandomness")
+                        // simulate callback from the oracle network
+                        await VRFCoordinatorV2_5Mock.fulfillRandomWords(requestId, randomNumberConsumerV2Plus.address)
 
-                      const firstRandomNumber = await randomNumberConsumerV2Plus.s_randomWords(0)
-                      const secondRandomNumber = await randomNumberConsumerV2Plus.s_randomWords(1)
+                        const firstRandomNumber = await randomNumberConsumerV2Plus.s_randomWords(0)
+                        const secondRandomNumber = await randomNumberConsumerV2Plus.s_randomWords(1)
 
-                      assert(
-                          firstRandomNumber.gt(ethers.constants.Zero),
-                          "First random number is greater than zero"
-                      )
+                        assert(
+                            firstRandomNumber.gt(ethers.constants.Zero),
+                            "First random number is greater than zero"
+                        )
 
-                      assert(
-                          secondRandomNumber.gt(ethers.constants.Zero),
-                          "Second random number is greater than zero"
-                      )
+                        assert(
+                            secondRandomNumber.gt(ethers.constants.Zero),
+                            "Second random number is greater than zero"
+                        )
                   })
 
                   it("Should successfully fire event on callback", async function () {

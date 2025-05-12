@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-// import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
-import "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
 
 error NotEnoughMoney();
 error NotEnoughTickets();
@@ -75,8 +73,7 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
     event DrawingWinner(uint256 indexed drawingNumber, address indexed winner);
     event WinnerPaid(uint256 indexed drawingNumber, address indexed paidWinner);
     event RequestSent(uint256 requestId, uint256 timestamp);
-
-    event ReturnedRandomness(uint256[] randomWords);            
+        
 
     /* ######### */
     /* Functions */
@@ -200,7 +197,6 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
     }
 
     function fulfillRandomWords(uint256, /* requestId */ uint256[] calldata randomWords) internal override {
-        emit ReturnedRandomness(randomWords);
         numbersSelected = getUniqueNumbersFromVRF(randomWords, 60, 5);
         findWinners();
     }
