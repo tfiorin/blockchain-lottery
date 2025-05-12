@@ -5,6 +5,7 @@ pragma solidity ^0.8.19;
 import {VRFConsumerBaseV2Plus} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFConsumerBaseV2Plus.sol";
 import {VRFV2PlusClient} from "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
+import "@chainlink/contracts/src/v0.8/vrf/mocks/VRFCoordinatorV2_5Mock.sol";
 
 error NotEnoughMoney();
 error NotEnoughTickets();
@@ -54,10 +55,13 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
     uint16      private constant REQUEST_CONFIRMATIONS = 3;
     uint32      private constant NUM_WORDS = 5;    
     uint256     private immutable i_subscriptionId;
-    bytes32     private immutable i_gasLane;
+    bytes32     private immutable i_keyHash;
     uint32      private immutable i_callbackGasLimit;
     uint256     private immutable i_interval;
-    uint256     private lastTimeStamp;    
+    uint256     private lastTimeStamp;   
+
+    uint256[] public s_randomWords;
+    uint256 public s_requestId; 
 
     /**
      * HARDCODED FOR SEPOLIA
@@ -70,20 +74,22 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
     event DrawingEntered(uint256 drawingNumber, address ticketOwner, uint256 num1, uint256 num2, uint256 num3, uint256 num4, uint256 num5);
     event DrawingWinner(uint256 indexed drawingNumber, address indexed winner);
     event WinnerPaid(uint256 indexed drawingNumber, address indexed paidWinner);
-    event RequestSent(uint256 requestId, uint256 timestamp);            
+    event RequestSent(uint256 requestId, uint256 timestamp);
+
+    event ReturnedRandomness(uint256[] randomWords);            
 
     /* ######### */
     /* Functions */
     /* ######### */
     constructor(
         uint256 subscriptionId,
-        bytes32 gasLane, // keyHash
+        bytes32 keyHash, // keyHash
         uint256 interval,
         uint32 callbackGasLimit,
         address vrfCoordinatorV2,
         address usdcTokenAddress
     ) VRFConsumerBaseV2Plus(vrfCoordinatorV2) {
-        i_gasLane = gasLane;
+        i_keyHash = keyHash;
         i_interval = interval;
         i_subscriptionId = subscriptionId;        
         i_callbackGasLimit = callbackGasLimit;
@@ -160,7 +166,7 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
         // -> https://docs.chain.link/vrf/v2-5/subscription/get-a-random-number
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
-                keyHash: i_gasLane,
+                keyHash: i_keyHash,
                 subId: i_subscriptionId,
                 requestConfirmations: REQUEST_CONFIRMATIONS,
                 callbackGasLimit: i_callbackGasLimit,
@@ -175,7 +181,26 @@ contract Lottery is VRFConsumerBaseV2Plus, AutomationCompatibleInterface {
         emit RequestSent(requestId, block.timestamp);
     }
 
+    function requestRandomWords() external onlyOwner {
+        s_requestId = s_vrfCoordinator.requestRandomWords(
+            VRFV2PlusClient.RandomWordsRequest({
+                keyHash: i_keyHash,
+                subId: i_subscriptionId,
+                requestConfirmations: REQUEST_CONFIRMATIONS,
+                callbackGasLimit: i_callbackGasLimit,
+                numWords: NUM_WORDS,
+                extraArgs: VRFV2PlusClient._argsToBytes(
+                    // Set nativePayment to true to pay for VRF requests with Sepolia ETH instead of LINK
+                    VRFV2PlusClient.ExtraArgsV1({nativePayment: false})
+                )
+            })
+        );
+
+        emit RequestSent(s_requestId, block.timestamp);
+    }
+
     function fulfillRandomWords(uint256, /* requestId */ uint256[] calldata randomWords) internal override {
+        emit ReturnedRandomness(randomWords);
         numbersSelected = getUniqueNumbersFromVRF(randomWords, 60, 5);
         findWinners();
     }
